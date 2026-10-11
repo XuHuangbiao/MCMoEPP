@@ -1,4 +1,5 @@
 # MCMoE++: Incomplete Multimodal Action Quality Assessment via Modality Completion with Mixture of Experts
+
 This is the code for our "Incomplete Multimodal Action Quality Assessment via Modality Completion with Mixture of Experts (MCMoE++)".
 
 ## Environments
@@ -21,91 +22,45 @@ The CMU-MOSI and CMU-MOSEI features can be downloaded from the [GCNet](https://g
 The pretrained weights can be downloaded from [here](https://pan.baidu.com/s/1beMiFjbrBZmsGsaQ9ZYLXw?pwd=c456) (extraction code: c456).
 
 ## Running
+
 ### The following are examples only, more details coming soon!
 
 Please fill in or select the args enclosed by {} first.
 
-Run the following AQA commands from `AQA/`.
-
-On the **FS1000** dataset:
+On the **FS1000 / Fis-V / RG** datasets, run the following commands from `AQA/`. `--action-type` is selected from `TES/PCS/SS/TR/PE/CO/IN` for FS1000, `TES/PCS` for Fis-V, and `Ball/Clubs/Hoop/Ribbon` for RG.
 
 - Training
+```typescript
+CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {action type} --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed}
 
 ```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {TES/PCS/SS/TR/PE/CO/IN} --dataset FS1000 --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed}
-```
 
-- Modality-level testing
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {TES/PCS/SS/TR/PE/CO/IN} --dataset FS1000 --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --test --ckpt {the name of the used checkpoint}
-```
-
-- Proportional missingness testing
+- Testing
+```typescript
+CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {action type} --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} [--missing-ratio {0.0-0.7}] --test --ckpt {the name of the used checkpoint}
 
 ```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {TES/PCS/SS/TR/PE/CO/IN} --dataset FS1000 --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --missing-ratio {0.0-0.7} --test --ckpt {the name of the used checkpoint}
-```
 
-On the **FisV** dataset:
-
-- Training
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {TES/PCS} --dataset FisV --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed}
-```
-
-- Modality-level testing
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {TES/PCS} --dataset FisV --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --test --ckpt {the name of the used checkpoint}
-```
-
-- Proportional missingness testing
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {TES/PCS} --dataset FisV --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --missing-ratio {0.0-0.7} --test --ckpt {the name of the used checkpoint}
-```
-
-On the **RG** dataset:
-
-- Training
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {Ball/Clubs/Hoop/Ribbon} --dataset RG --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed}
-```
-
-- Modality-level testing
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {Ball/Clubs/Hoop/Ribbon} --dataset RG --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --test --ckpt {the name of the used checkpoint}
-```
-
-- Proportional missingness testing
-
-```
-CUDA_VISIBLE_DEVICES={device ID} python main.py --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {Ball/Clubs/Hoop/Ribbon} --dataset RG --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --missing-ratio {0.0-0.7} --test --ckpt {the name of the used checkpoint}
-```
-
-Modality-level testing covers VAF and all six incomplete combinations. Proportional missingness testing reads the released JSON files in `AQA/masks/`.
+Without `--missing-ratio`, modality-level testing is performed on VAF and all six incomplete combinations. With `--missing-ratio`, proportional missingness testing is performed using the released JSON files in `AQA/masks/`.
 
 On the **CMU-MOSI / CMU-MOSEI** datasets, run the following commands from `Sentiment/`:
 
 - Training
-
-```
+```typescript
 CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --sdrgnn-data-root {data root} --text-feature {text feature name} --video-feature {video feature name} --audio-feature {audio feature name} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --alpha {alpha} --margin {margin} --dropout {dropout} --seed {seed}
+
 ```
 
 - Testing
-
-```
+```typescript
 CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --sdrgnn-data-root {data root} --text-feature {text feature name} --video-feature {video feature name} --audio-feature {audio feature name} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --seed {seed} --test-eval-epoch {validation-selected epoch} --test --ckpt {the name of the used checkpoint}
+
 ```
 
 Sentiment testing retains the online utterance-level missingness protocol. Bare state-dict checkpoints require their validation-selected epoch to reproduce the corresponding test mask.
 
 ## Acknowledgements
-This repository builds upon [MCMoE (AAAI 2026)](https://github.com/XuHuangbiao/MCMoE) .
+
+This repository builds upon [MCMoE (AAAI 2026)](https://github.com/XuHuangbiao/MCMoE).
 
 We thank the authors for their contributions to the research community.
