@@ -106,6 +106,6 @@ CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --sdrgnn-
 Sentiment testing retains the online utterance-level missingness protocol. Bare state-dict checkpoints require their validation-selected epoch to reproduce the corresponding test mask.
 
 ## Acknowledgements
-This repository builds upon [MCMoE (AAAI 2026)]({link}) and [DanceSport](https://github.com/XuHuangbiao/DanceSport).
+This repository builds upon [MCMoE (AAAI 2026)]({link}) .
 
 We thank the authors for their contributions to the research community.
