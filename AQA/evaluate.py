@@ -88,7 +88,6 @@ def _model(args: argparse.Namespace, device: torch.device) -> MoE_AQA:
     model_args = SimpleNamespace(
         use_pe=args.use_pe,
         ablation_variant=args.ablation_variant,
-        cf_variant="full",
         recon_layers=args.recon_layers,
     )
     network = MoE_AQA(

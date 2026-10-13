@@ -45,22 +45,6 @@ parser.add_argument(
     help="evaluate one proportional missing rate using the released masks/*.json",
 )
 parser.add_argument(
-    "--cf_variant",
-    choices=(
-        "full",
-        "baseline",
-        "stem",
-        "agmg",
-        "specific_only_analysis",
-        "no_ma_router",
-        "no_anchor_residual",
-        "no_shared_expert",
-        "no_acdg",
-    ),
-    default="full",
-    help="same-checkpoint inference intervention; non-full variants are rejected during training",
-)
-parser.add_argument(
     "--ablation_variant",
     choices=(
         "full",
@@ -74,7 +58,7 @@ parser.add_argument(
         "no_ma_router",
         "no_anchor_residual",
         "no_shared_expert",
-        "no_acdg",
+        "no_coord",
         "no_lrecon",
         "no_lalign",
         "no_ldiv",
@@ -112,14 +96,11 @@ parser.add_argument("--recon-loss-weight", type=float, default=1.0)
 
 parser.add_argument("--dropout", type=float, default=0.0)
 parser.add_argument("--score_range", type=int, default=None)
-parser.add_argument("--target-missing-coef", type=float, default=None)
-parser.add_argument("--target-missing-mse", type=float, default=None)
-parser.add_argument("--target-save-prefix", type=str, default="target_pass")
 parser.add_argument(
     "--checkpoint-selection",
-    choices=("missing_avg", "vaf_coef", "vaf_mse", "fixed_epoch"),
-    default="missing_avg",
-    help="checkpoint rule; formal retrained ablations use the action-specific VAF/fixed-epoch rule",
+    choices=("vaf_coef", "vaf_mse", "fixed_epoch"),
+    default="vaf_coef",
+    help="checkpoint rule; choose the task-specific rule recorded with the experiment",
 )
 parser.add_argument(
     "--selection-epoch",

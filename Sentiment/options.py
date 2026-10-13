@@ -20,7 +20,7 @@ def parse_bool(value: Union[str, bool]) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train or test MCMoE+ on CMU-MOSI/CMU-MOSEI with utterance-level missing modalities."
+        description="Train or test MCMoE++ on CMU-MOSI/CMU-MOSEI with utterance-level missing modalities."
     )
 
     data = parser.add_argument_group("data")
@@ -54,16 +54,16 @@ def build_parser() -> argparse.ArgumentParser:
     model.add_argument(
         "--model-variant",
         choices=(
-            "mcmoe_plus",
+            "mcmoe_pp",
             "ma_moe",
             "wo_ma_router",
             "wo_anchor_residual",
             "wo_shared_expert",
-            "wo_acdg",
+            "wo_coord",
             "wo_gamma_stream",
             "wo_beta_global",
         ),
-        default="mcmoe_plus",
+        default="mcmoe_pp",
         help="Architecture flag stored with the checkpoint; non-full variants require retraining.",
     )
     model.add_argument("--in_dim", type=int, default=768)

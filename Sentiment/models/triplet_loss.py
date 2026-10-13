@@ -9,18 +9,15 @@ class HardTripletLoss(nn.Module):
     For each anchor, we get the hardest positive and hardest negative to form a triplet.
     """
 
-    def __init__(self, margin=0.1, hardest=False, squared=False):
+    def __init__(self, margin=0.1, hardest=False):
         """
         Args:
             margin: margin for triplet loss
             hardest: If true, loss is considered only hardest triplets.
-            squared: If true, output is the pairwise squared euclidean distance matrix.
-                If false, output is the pairwise euclidean distance matrix.
         """
         super(HardTripletLoss, self).__init__()
         self.margin = margin
         self.hardest = hardest
-        self.squared = squared
 
     def forward(self, embeddings, labels):
         """
@@ -30,7 +27,7 @@ class HardTripletLoss(nn.Module):
         Returns:
             triplet_loss: scalar tensor containing the triplet loss
         """
-        pairwise_dist = _pairwise_distance(embeddings, squared=self.squared)
+        pairwise_dist = _pairwise_distance(embeddings)
 
         if self.hardest:
             # Get the hardest positive pairs
@@ -75,9 +72,8 @@ class HardTripletLoss(nn.Module):
         return triplet_loss
 
 
-def _pairwise_distance(x, squared=False, eps=1e-16):
+def _pairwise_distance(x):
     """Return the pairwise cosine distance used by the original objective."""
-    del squared, eps  # Retained in the signature for backward source compatibility.
     norm_x = F.normalize(x, dim=-1)
     distances = 1 - torch.mm(norm_x, norm_x.T)
     return distances

@@ -1,5 +1,5 @@
-"""MCMoE+ and preliminary baseline models for sentiment recognition."""
+"""MCMoE++ model components for sentiment recognition."""
 
-from .model import MoE_AQA
+from .model import MoE_Sentiment
 
-__all__ = ["MoE_AQA"]
+__all__ = ["MoE_Sentiment"]

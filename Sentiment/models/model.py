@@ -46,7 +46,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class ExtremeModalityGenerator(nn.Module):
+class AGMG(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
         self.cross_attn = nn.ModuleList(
@@ -71,14 +71,14 @@ class ExtremeModalityGenerator(nn.Module):
         return gate.unsqueeze(1) * mask_feat
 
 
-class MoE_AQA(nn.Module):
+class MoE_Sentiment(nn.Module):
     UNIFIED_VARIANTS = {
-        "mcmoe_plus",
+        "mcmoe_pp",
         "ma_moe",
         "wo_ma_router",
         "wo_anchor_residual",
         "wo_shared_expert",
-        "wo_acdg",
+        "wo_coord",
         "wo_gamma_stream",
         "wo_beta_global",
     }
@@ -86,11 +86,11 @@ class MoE_AQA(nn.Module):
     def __init__(self, in_dim, hidden_dim, n_head, n_encoder, n_decoder, n_query, dropout, config):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.ablation_variant = getattr(config, "model_variant", "mcmoe_plus")
+        self.ablation_variant = getattr(config, "model_variant", "mcmoe_pp")
         if self.ablation_variant not in self.UNIFIED_VARIANTS:
             raise ValueError(
-                f"{self.ablation_variant!r} is not a unified MCMoE+ variant; "
-                "this package exposes only unified MCMoE+ variants"
+                f"{self.ablation_variant!r} is not a unified MCMoE++ variant; "
+                "this package exposes only unified MCMoE++ variants"
             )
         text_dim = getattr(config, "text_dim", None) or in_dim
         visual_dim = getattr(config, "visual_dim", None) or 768
@@ -112,9 +112,9 @@ class MoE_AQA(nn.Module):
         )
         self.generators = nn.ModuleDict(
             {
-                "v": ExtremeModalityGenerator(hidden_dim),
-                "a": ExtremeModalityGenerator(hidden_dim),
-                "f": ExtremeModalityGenerator(hidden_dim),
+                "v": AGMG(hidden_dim),
+                "a": AGMG(hidden_dim),
+                "f": AGMG(hidden_dim),
             }
         )
         self.router_mix = Mlp(3 * hidden_dim, hidden_dim // 2, 2)
@@ -125,11 +125,7 @@ class MoE_AQA(nn.Module):
         nn.init.constant_(self.stream_reliability.fc2.bias, 4.0)
         self.shared_specific_gate = Mlp(3 * hidden_dim, hidden_dim // 2, 1)
 
-        # Replace hard-coded visible_num / 3.0 with learnable mask-conditioned cap priors.
-        # Each cap is a scalar per visibility pattern (8 patterns: v*4 + a*2 + f).
-        # Initialized so that sigmoid(prior(mask_id)) == n_vis / 3 at step 0,
-        # which preserves the original behavior exactly. After step 0 the caps are
-        # refined end-to-end by gradient descent.
+        # Learned cap priors for the eight visibility patterns (v*4 + a*2 + f).
         self.gen_cap_prior = nn.Embedding(8, 1)
         self.shared_cap_prior = nn.Embedding(8, 1)
         self._init_cap_priors()
@@ -175,7 +171,7 @@ class MoE_AQA(nn.Module):
             del self.shared_cap_prior
         elif self.ablation_variant == "wo_shared_expert":
             del self.experts["s"]
-        elif self.ablation_variant == "wo_acdg":
+        elif self.ablation_variant == "wo_coord":
             del self.stream_reliability
             del self.shared_specific_gate
             del self.gen_cap_prior
@@ -209,9 +205,7 @@ class MoE_AQA(nn.Module):
         sigmoid(prior[mask_id]) == n_vis / 3 for every mask_id.
 
         mask_id = v * 4 + a * 2 + f, n_vis = popcount(mask_id).
-        This makes the model behavior at step 0 exactly equivalent to the
-        previous hard-coded visible_num / 3.0 cap, while making the caps
-        learnable thereafter.
+        The prior is initialized from the number of available modalities.
         """
         with torch.no_grad():
 
@@ -379,7 +373,7 @@ class MoE_AQA(nn.Module):
                 "ordinary_softmax_sum" if variant == "wo_anchor_residual" else "anchor_residual"
             ),
             "stream_gate": (
-                "fixed_1" if variant in {"ma_moe", "wo_acdg", "wo_gamma_stream"} else "acdg_gamma"
+                "fixed_1" if variant in {"ma_moe", "wo_coord", "wo_gamma_stream"} else "acdg_gamma"
             ),
             "shared_representation": (
                 "none"
@@ -394,7 +388,7 @@ class MoE_AQA(nn.Module):
                 "none"
                 if variant == "ma_moe"
                 else "fixed_0.5"
-                if variant in {"wo_acdg", "wo_beta_global"}
+                if variant in {"wo_coord", "wo_beta_global"}
                 else "acdg_beta"
             ),
             "cfm": True,
@@ -417,7 +411,7 @@ class MoE_AQA(nn.Module):
         return (stacked * weights.unsqueeze(-1)).sum(dim=2)
 
     def _specific_and_global_path(self, v_mask, a_mask, f_mask, mask_tensor):
-        """Run the sole variant-controlled MA-MoE/ASEC path.
+        """Run the sole variant-controlled MA-MoE/MASEC path.
 
         AGMG completion, the downstream CFM block, decoder, losses, dataset
         protocol, and checkpoint selection are outside this function and are
@@ -446,7 +440,7 @@ class MoE_AQA(nn.Module):
                 )
             specific_pre.append(mixed)
 
-        if self.ablation_variant in {"ma_moe", "wo_acdg", "wo_gamma_stream"}:
+        if self.ablation_variant in {"ma_moe", "wo_coord", "wo_gamma_stream"}:
             reliability = [torch.ones_like(feat[..., :1]) for feat in specific_pre]
         else:
             reliability = [
@@ -466,7 +460,7 @@ class MoE_AQA(nn.Module):
             else:
                 shared_feat = self._build_shared_feat(v_mask, a_mask, f_mask)
 
-            if self.ablation_variant in {"wo_acdg", "wo_beta_global"}:
+            if self.ablation_variant in {"wo_coord", "wo_beta_global"}:
                 shared_ratio = torch.full_like(specific_global[..., :1], 0.5)
                 fusion = specific_global + shared_ratio * (shared_feat - specific_global)
             else:

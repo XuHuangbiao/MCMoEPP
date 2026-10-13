@@ -109,7 +109,7 @@ def make_loader(split: str, args, shuffle: bool) -> DataLoader:
 
 
 def build_model(args, device: torch.device) -> torch.nn.Module:
-    network = model.MoE_AQA(
+    network = model.MoE_Sentiment(
         args.in_dim,
         args.hidden_dim,
         args.n_head,
@@ -266,7 +266,7 @@ def run_training(args, device: torch.device) -> None:
     train_loader = make_loader("train", args, shuffle=True)
     test_loader = make_loader("test", args, shuffle=False)
     valid_loader = make_loader("valid", args, shuffle=False)
-    next(iter(test_loader))  # Match the pretraining sanity batch in the original protocol.
+    next(iter(test_loader))  # Consume one batch to preserve the RNG state used by the reported runs.
     network = build_model(args, device)
     criterion = loss.LossFun(args.alpha, args.margin)
     optimizer = build_optimizer(network, args)

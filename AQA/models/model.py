@@ -52,7 +52,7 @@ def generate_modality_mask():
     return combinations[idx.item()]
 
 
-class ExtremeModalityGenerator(nn.Module):
+class AGMG(nn.Module):
     def __init__(self, hidden_dim, recon_layers=2):
         super().__init__()
         if recon_layers < 1:
@@ -80,17 +80,6 @@ class ExtremeModalityGenerator(nn.Module):
 
 
 class MoE_AQA(nn.Module):
-    CF_VARIANTS = (
-        "full",
-        "baseline",
-        "stem",
-        "agmg",
-        "specific_only_analysis",
-        "no_ma_router",
-        "no_anchor_residual",
-        "no_shared_expert",
-        "no_acdg",
-    )
     ABLATION_VARIANTS = (
         "full",
         "baseline",
@@ -103,7 +92,7 @@ class MoE_AQA(nn.Module):
         "no_ma_router",
         "no_anchor_residual",
         "no_shared_expert",
-        "no_acdg",
+        "no_coord",
         "no_lrecon",
         "no_lalign",
         "no_ldiv",
@@ -112,7 +101,6 @@ class MoE_AQA(nn.Module):
     def __init__(self, in_dim, hidden_dim, n_head, n_encoder, n_decoder, n_query, dropout, config):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.set_cf_variant(getattr(config, "cf_variant", "full"))
         self.set_ablation_variant(getattr(config, "ablation_variant", "full"))
         self.in_proj = nn.ModuleDict(
             {
@@ -131,9 +119,9 @@ class MoE_AQA(nn.Module):
         )
         self.generators = nn.ModuleDict(
             {
-                "v": ExtremeModalityGenerator(hidden_dim, getattr(config, "recon_layers", 2)),
-                "a": ExtremeModalityGenerator(hidden_dim, getattr(config, "recon_layers", 2)),
-                "f": ExtremeModalityGenerator(hidden_dim, getattr(config, "recon_layers", 2)),
+                "v": AGMG(hidden_dim, getattr(config, "recon_layers", 2)),
+                "a": AGMG(hidden_dim, getattr(config, "recon_layers", 2)),
+                "f": AGMG(hidden_dim, getattr(config, "recon_layers", 2)),
             }
         )
         router_outputs = 3 if self.ablation_variant in {"no_anchor_residual", "no_ma_moe"} else 2
@@ -146,11 +134,7 @@ class MoE_AQA(nn.Module):
         nn.init.constant_(self.stream_reliability.fc2.bias, 4.0)
         self.shared_specific_gate = Mlp(3 * hidden_dim, hidden_dim // 2, 1)
 
-        # Replace hard-coded visible_num / 3.0 with learnable mask-conditioned cap priors.
-        # Each cap is a scalar per visibility pattern (8 patterns: v*4 + a*2 + f).
-        # Initialized so that sigmoid(prior(mask_id)) == n_vis / 3 at step 0,
-        # which preserves the original behavior exactly. After step 0 the caps are
-        # refined end-to-end by gradient descent.
+        # Learned cap priors for the eight visibility patterns (v*4 + a*2 + f).
         self.gen_cap_prior = nn.Embedding(8, 1)
         self.shared_cap_prior = nn.Embedding(8, 1)
         self._init_cap_priors()
@@ -173,9 +157,7 @@ class MoE_AQA(nn.Module):
         )
         self.prototype = nn.Embedding(n_query, hidden_dim)
         self.regressor = nn.Linear(hidden_dim, n_query)
-        # Non-persistent keeps compatibility with existing MCMoE+ checkpoints,
-        # where this tensor was not part of the state dict, while making CPU
-        # inference and normal ``model.to(device)`` transfers work correctly.
+        # Query-score weights move with the model without entering its state dict.
         self.register_buffer("weight", torch.linspace(0, 1, n_query), persistent=False)
         self.pos_encoder = PositionalEncoding(hidden_dim)
 
@@ -184,9 +166,7 @@ class MoE_AQA(nn.Module):
         sigmoid(prior[mask_id]) == n_vis / 3 for every mask_id.
 
         mask_id = v * 4 + a * 2 + f, n_vis = popcount(mask_id).
-        This makes the model behavior at step 0 exactly equivalent to the
-        previous hard-coded visible_num / 3.0 cap, while making the caps
-        learnable thereafter.
+        The prior is initialized from the number of available modalities.
         """
         with torch.no_grad():
 
@@ -245,7 +225,7 @@ class MoE_AQA(nn.Module):
         return torch.sigmoid(logits)
 
     def _feature_only_router(self, feat):
-        """Reuse the trained router with stream/mask input blocks set to zero."""
+        """Feature-only router for the trained no_ma_router ablation."""
         zeros = torch.zeros_like(feat)
         return torch.sigmoid(self.router_mix(torch.cat([feat, zeros, zeros], dim=-1)))
 
@@ -275,11 +255,6 @@ class MoE_AQA(nn.Module):
         fusion = anchor + residual / denom
         return fusion
 
-    def set_cf_variant(self, variant):
-        if variant not in self.CF_VARIANTS:
-            raise ValueError(f"unknown cf_variant={variant!r}; expected one of {self.CF_VARIANTS}")
-        self.cf_variant = variant
-
     def set_ablation_variant(self, variant):
         if variant not in self.ABLATION_VARIANTS:
             raise ValueError(
@@ -287,34 +262,8 @@ class MoE_AQA(nn.Module):
             )
         self.ablation_variant = variant
 
-    def _active_variant(self):
-        if self.ablation_variant != "full" and self.cf_variant != "full":
-            raise RuntimeError("ablation_variant and cf_variant cannot both be non-full")
-        return self.ablation_variant if self.ablation_variant != "full" else self.cf_variant
-
     @staticmethod
     def _softmax_specific_fusion(e0, e1, e2, weights):
-        return weights[..., 0:1] * e0 + weights[..., 1:2] * e1 + weights[..., 2:3] * e2
-
-    def _unanchored_specific_fusion(self, e0, e1, e2, router_weight, anchor_idx):
-        """Convert the learned two complementary weights to a three-expert softmax.
-
-        This is an inference-only counterfactual conversion.  The matched expert
-        receives a zero baseline logit; the two learned router outputs are
-        clamped and converted with logit before the three-way softmax.
-        """
-        r = router_weight.clamp(1e-6, 1.0 - 1e-6)
-        other_logits = torch.logit(r)
-        zero = torch.zeros_like(other_logits[..., 0:1])
-        if anchor_idx == 0:
-            logits = torch.cat([zero, other_logits[..., 0:1], other_logits[..., 1:2]], dim=-1)
-        elif anchor_idx == 1:
-            logits = torch.cat([other_logits[..., 0:1], zero, other_logits[..., 1:2]], dim=-1)
-        elif anchor_idx == 2:
-            logits = torch.cat([other_logits[..., 0:1], other_logits[..., 1:2], zero], dim=-1)
-        else:
-            raise ValueError(f"anchor_idx must be 0, 1, or 2; got {anchor_idx}")
-        weights = torch.softmax(logits, dim=-1)
         return weights[..., 0:1] * e0 + weights[..., 1:2] * e1 + weights[..., 2:3] * e2
 
     def _build_shared_feat(self, v_mask, a_mask, f_mask):
@@ -357,10 +306,6 @@ class MoE_AQA(nn.Module):
 
     def forward(self, video, audio, flow, mask):
         if self.training:
-            if self.cf_variant != "full":
-                raise RuntimeError(
-                    f"cf_variant={self.cf_variant!r} is inference-only and cannot be used for training"
-                )
             return self.forward_train(video, audio, flow, mask)
         else:
             return self.forward_test(video, audio, flow, mask)
@@ -455,7 +400,7 @@ class MoE_AQA(nn.Module):
                 )
 
             specific_v_pre, specific_a_pre, specific_f_pre = specific_v, specific_a, specific_f
-            if variant in {"ma_moe", "no_acdg"}:
+            if variant in {"ma_moe", "no_coord"}:
                 rel_v = torch.ones_like(specific_v[..., :1])
                 rel_a = torch.ones_like(specific_a[..., :1])
                 rel_f = torch.ones_like(specific_f[..., :1])
@@ -476,7 +421,7 @@ class MoE_AQA(nn.Module):
             else:
                 shared_feat = self._build_shared_feat(v_mask, a_mask, f_mask)
             if variant != "ma_moe":
-                if variant == "no_acdg":
+                if variant == "no_coord":
                     shared_ratio = torch.full_like(specific_global[..., :1], 0.5)
                     fusion = specific_global + shared_ratio * (shared_feat - specific_global)
                 else:
@@ -515,7 +460,7 @@ class MoE_AQA(nn.Module):
         }
 
     def forward_test(self, video, audio, flow, mask):
-        variant = self._active_variant()
+        variant = self.ablation_variant
         b, t, c = video.shape
         mask_tensor = torch.tensor(mask, device=video.device).float().view(1, 3)
         v_visible, a_visible, f_visible = mask
@@ -559,7 +504,7 @@ class MoE_AQA(nn.Module):
 
         if variant in {"baseline", "stem", "agmg"}:
             # Progressive mechanism-only rows before MA-MoE: the three current
-            # streams enter the original CFM directly.  No expert/router/ASEC
+            # streams enter the original CFM directly. No expert/router/MASEC
             # parameter is called.
             specific_v, specific_a, specific_f = v_mask, a_mask, f_mask
             specific_cat = torch.cat([specific_v, specific_a, specific_f], -1)
@@ -599,26 +544,15 @@ class MoE_AQA(nn.Module):
                     expert_fv, expert_fa, expert_ff, router_weight_f
                 )
             elif variant == "no_anchor_residual":
-                if self.ablation_variant == "no_anchor_residual":
-                    specific_v = self._softmax_specific_fusion(
-                        expert_vv, expert_va, expert_vf, router_weight_v
-                    )
-                    specific_a = self._softmax_specific_fusion(
-                        expert_av, expert_aa, expert_af, router_weight_a
-                    )
-                    specific_f = self._softmax_specific_fusion(
-                        expert_fv, expert_fa, expert_ff, router_weight_f
-                    )
-                else:
-                    specific_v = self._unanchored_specific_fusion(
-                        expert_vv, expert_va, expert_vf, router_weight_v, anchor_idx=0
-                    )
-                    specific_a = self._unanchored_specific_fusion(
-                        expert_av, expert_aa, expert_af, router_weight_a, anchor_idx=1
-                    )
-                    specific_f = self._unanchored_specific_fusion(
-                        expert_fv, expert_fa, expert_ff, router_weight_f, anchor_idx=2
-                    )
+                specific_v = self._softmax_specific_fusion(
+                    expert_vv, expert_va, expert_vf, router_weight_v
+                )
+                specific_a = self._softmax_specific_fusion(
+                    expert_av, expert_aa, expert_af, router_weight_a
+                )
+                specific_f = self._softmax_specific_fusion(
+                    expert_fv, expert_fa, expert_ff, router_weight_f
+                )
             else:
                 specific_v = self._complementary_specific_fusion(
                     expert_vv, expert_va, expert_vf, router_weight_v, anchor_idx=0
@@ -630,7 +564,7 @@ class MoE_AQA(nn.Module):
                     expert_fv, expert_fa, expert_ff, router_weight_f, anchor_idx=2
                 )
 
-            if variant in {"specific_only_analysis", "ma_moe", "no_acdg"}:
+            if variant in {"ma_moe", "no_coord"}:
                 rel_v = torch.ones_like(specific_v[..., :1])
                 rel_a = torch.ones_like(specific_a[..., :1])
                 rel_f = torch.ones_like(specific_f[..., :1])
@@ -644,14 +578,14 @@ class MoE_AQA(nn.Module):
             specific_cat = torch.cat([specific_v, specific_a, specific_f], -1)
             specific_global = self.fusion(specific_cat.transpose(1, 2)).transpose(1, 2)
 
-            if variant in {"specific_only_analysis", "ma_moe"}:
+            if variant == "ma_moe":
                 fusion = specific_global
             else:
                 if variant == "no_shared_expert":
                     shared_feat = (v_mask + a_mask + f_mask) / 3.0
                 else:
                     shared_feat = self._build_shared_feat(v_mask, a_mask, f_mask)
-                if variant == "no_acdg":
+                if variant == "no_coord":
                     shared_ratio = torch.full_like(specific_global[..., :1], 0.5)
                     fusion = specific_global + shared_ratio * (shared_feat - specific_global)
                 else:
