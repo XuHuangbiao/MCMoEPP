@@ -33,6 +33,8 @@ On the **FS1000 / Fis-V / RG** datasets, run the following commands from `AQA/`.
 ```typescript
 CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {action type} --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed} --checkpoint-selection {task rule} [--selection-epoch {zero-based epoch}]
 
+```
+
 - Testing
 ```typescript
 CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {action type} --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} [--missing-ratio {0.0-0.7}] --test --ckpt {the name of the used checkpoint}
