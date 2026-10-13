@@ -119,9 +119,6 @@ def build_model(args, device: torch.device) -> torch.nn.Module:
         args.dropout,
         args,
     )
-    print(f"Model variant: {args.model_variant}")
-    if hasattr(network, "computation_path"):
-        print(f"Computation path: {network.computation_path()}")
     return network.to(device)
 
 
@@ -176,9 +173,8 @@ def save_checkpoint(path: Path, network: torch.nn.Module, args, epoch: int, metr
         {
             "model_state": network.state_dict(),
             "epoch": epoch,
-        "validation_metrics": metrics,
-        "selection_metric": args.metric_main,
-            "model_variant": args.model_variant,
+            "validation_metrics": metrics,
+            "selection_metric": args.metric_main,
             "dataset": args.dataset,
             "missing_rate": args.missing_rate,
         },
@@ -196,16 +192,11 @@ def load_checkpoint(path: Path, network: torch.nn.Module, device: torch.device) 
 def write_summary(
     args, best_epoch: int, validation: dict, test: dict, used_checkpoint: Path
 ) -> Path:
-    output = (
-        Path(args.summary_path)
-        if args.summary_path
-        else Path(args.output_dir) / "summaries" / f"{args.model_name}_summary.csv"
-    )
+    output = Path(args.output_dir) / "summaries" / f"{args.model_name}_summary.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
     row = {
         "dataset": args.dataset,
         "model_name": args.model_name,
-        "model_variant": args.model_variant,
         "missing_rate": args.missing_rate,
         "seed": args.seed,
         "selection_metric": args.metric_main,
@@ -241,11 +232,6 @@ def run_test(args, device: torch.device) -> None:
     network = build_model(args, device)
     path = resolve_checkpoint(args.ckpt, args)
     metadata = load_checkpoint(path, network, device)
-    checkpoint_variant = metadata.get("model_variant")
-    if checkpoint_variant and checkpoint_variant != args.model_variant:
-        raise ValueError(
-            f"Checkpoint variant {checkpoint_variant!r} does not match {args.model_variant!r}."
-        )
     if args.test_eval_epoch is not None:
         best_epoch = args.test_eval_epoch
     elif "epoch" in metadata:

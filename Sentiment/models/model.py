@@ -72,26 +72,9 @@ class AGMG(nn.Module):
 
 
 class MoE_Sentiment(nn.Module):
-    UNIFIED_VARIANTS = {
-        "mcmoe_pp",
-        "ma_moe",
-        "wo_ma_router",
-        "wo_anchor_residual",
-        "wo_shared_expert",
-        "wo_coord",
-        "wo_gamma_stream",
-        "wo_beta_global",
-    }
-
     def __init__(self, in_dim, hidden_dim, n_head, n_encoder, n_decoder, n_query, dropout, config):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.ablation_variant = getattr(config, "model_variant", "mcmoe_pp")
-        if self.ablation_variant not in self.UNIFIED_VARIANTS:
-            raise ValueError(
-                f"{self.ablation_variant!r} is not a unified MCMoE++ variant; "
-                "this package exposes only unified MCMoE++ variants"
-            )
         text_dim = getattr(config, "text_dim", None) or in_dim
         visual_dim = getattr(config, "visual_dim", None) or 768
         audio_dim = getattr(config, "audio_dim", None) or 1024
@@ -150,38 +133,6 @@ class MoE_Sentiment(nn.Module):
         self.regressor = nn.Linear(hidden_dim, n_query)
         self.register_buffer("weight", torch.linspace(0, 1, n_query))
         self.pos_encoder = PositionalEncoding(hidden_dim)
-
-        # Variant-only parameters are instantiated only when they are part of
-        # the real forward path, so parameter counts and optimization are honest.
-        if self.ablation_variant == "wo_ma_router":
-            # One global residual-coefficient pair shared by every stream and
-            # sample: no feature, stream identity, or availability input.
-            self.global_residual_logits = nn.Parameter(torch.zeros(2))
-            del self.router_mix
-        elif self.ablation_variant == "wo_anchor_residual":
-            # Keep the exact MA conditioning input, but predict an ordinary
-            # three-expert softmax instead of two anchor residual coefficients.
-            self.router_mix = Mlp(3 * hidden_dim, hidden_dim // 2, 3)
-
-        if self.ablation_variant == "ma_moe":
-            del self.experts["s"]
-            del self.stream_reliability
-            del self.shared_specific_gate
-            del self.gen_cap_prior
-            del self.shared_cap_prior
-        elif self.ablation_variant == "wo_shared_expert":
-            del self.experts["s"]
-        elif self.ablation_variant == "wo_coord":
-            del self.stream_reliability
-            del self.shared_specific_gate
-            del self.gen_cap_prior
-            del self.shared_cap_prior
-        elif self.ablation_variant == "wo_gamma_stream":
-            del self.stream_reliability
-            del self.gen_cap_prior
-        elif self.ablation_variant == "wo_beta_global":
-            del self.shared_specific_gate
-            del self.shared_cap_prior
 
     def _score_from_query_features(self, fea):
         s = self.regressor(fea)
@@ -355,45 +306,6 @@ class MoE_Sentiment(nn.Module):
         fusion = specific_global + shared_ratio * (shared_feat - specific_global)
         return fusion, shared_ratio
 
-    def computation_path(self):
-        """Return the declarative path used for checkpoint/config auditing."""
-        variant = self.ablation_variant
-        return {
-            "variant": variant,
-            "router": (
-                "global_residual_coefficients"
-                if variant == "wo_ma_router"
-                else (
-                    "ma_conditioned_three_way_softmax"
-                    if variant == "wo_anchor_residual"
-                    else "ma_conditioned_residual_coefficients"
-                )
-            ),
-            "expert_mixing": (
-                "ordinary_softmax_sum" if variant == "wo_anchor_residual" else "anchor_residual"
-            ),
-            "stream_gate": (
-                "fixed_1" if variant in {"ma_moe", "wo_coord", "wo_gamma_stream"} else "acdg_gamma"
-            ),
-            "shared_representation": (
-                "none"
-                if variant == "ma_moe"
-                else (
-                    "completed_stream_mean"
-                    if variant == "wo_shared_expert"
-                    else "learned_shared_expert"
-                )
-            ),
-            "global_gate": (
-                "none"
-                if variant == "ma_moe"
-                else "fixed_0.5"
-                if variant in {"wo_coord", "wo_beta_global"}
-                else "acdg_beta"
-            ),
-            "cfm": True,
-        }
-
     def _expert_outputs(self, v_mask, a_mask, f_mask):
         outputs = []
         for stream in (v_mask, a_mask, f_mask):
@@ -405,69 +317,23 @@ class MoE_Sentiment(nn.Module):
             )
         return outputs
 
-    @staticmethod
-    def _ordinary_expert_sum(experts, weights):
-        stacked = torch.stack(experts, dim=2)
-        return (stacked * weights.unsqueeze(-1)).sum(dim=2)
-
     def _specific_and_global_path(self, v_mask, a_mask, f_mask, mask_tensor):
-        """Run the sole variant-controlled MA-MoE/MASEC path.
-
-        AGMG completion, the downstream CFM block, decoder, losses, dataset
-        protocol, and checkpoint selection are outside this function and are
-        therefore identical for every unified variant.
-        """
         streams = (v_mask, a_mask, f_mask)
-        expert_outputs = self._expert_outputs(v_mask, a_mask, f_mask)
+        expert_outputs = self._expert_outputs(*streams)
         specific_pre = []
-
         for stream_idx, (stream, experts) in enumerate(zip(streams, expert_outputs)):
-            if self.ablation_variant == "wo_ma_router":
-                coeff = torch.sigmoid(self.global_residual_logits)
-                weights = coeff.view(1, 1, 2).expand(stream.size(0), stream.size(1), 2)
-            elif self.ablation_variant == "wo_anchor_residual":
-                weights = F.softmax(
-                    self.router_mix(self._build_router_input(stream, mask_tensor, stream_idx)),
-                    dim=-1,
-                )
-            else:
-                weights = self._conditioned_router(stream, mask_tensor, stream_idx)
-            if self.ablation_variant == "wo_anchor_residual":
-                mixed = self._ordinary_expert_sum(experts, weights)
-            else:
-                mixed = self._complementary_specific_fusion(
-                    *experts, weights, anchor_idx=stream_idx
-                )
-            specific_pre.append(mixed)
-
-        if self.ablation_variant in {"ma_moe", "wo_coord", "wo_gamma_stream"}:
-            reliability = [torch.ones_like(feat[..., :1]) for feat in specific_pre]
-        else:
-            reliability = [
-                self._stream_reliability_gate(feat, mask_tensor, stream_idx)
-                for stream_idx, feat in enumerate(specific_pre)
-            ]
+            weights = self._conditioned_router(stream, mask_tensor, stream_idx)
+            specific_pre.append(
+                self._complementary_specific_fusion(*experts, weights, anchor_idx=stream_idx)
+            )
+        reliability = [
+            self._stream_reliability_gate(feat, mask_tensor, stream_idx)
+            for stream_idx, feat in enumerate(specific_pre)
+        ]
         specific = [gate * feat for gate, feat in zip(reliability, specific_pre)]
-
-        specific_cat = torch.cat(specific, dim=-1)
-        specific_global = self.fusion(specific_cat.transpose(1, 2)).transpose(1, 2)
-
-        if self.ablation_variant == "ma_moe":
-            fusion = specific_global
-        else:
-            if self.ablation_variant == "wo_shared_expert":
-                shared_feat = (v_mask + a_mask + f_mask) / 3.0
-            else:
-                shared_feat = self._build_shared_feat(v_mask, a_mask, f_mask)
-
-            if self.ablation_variant in {"wo_coord", "wo_beta_global"}:
-                shared_ratio = torch.full_like(specific_global[..., :1], 0.5)
-                fusion = specific_global + shared_ratio * (shared_feat - specific_global)
-            else:
-                fusion, shared_ratio = self._global_shared_specific_fusion(
-                    specific_global, shared_feat, mask_tensor
-                )
-
+        specific_global = self.fusion(torch.cat(specific, dim=-1).transpose(1, 2)).transpose(1, 2)
+        shared_feat = self._build_shared_feat(*streams)
+        fusion, _ = self._global_shared_specific_fusion(specific_global, shared_feat, mask_tensor)
         return fusion, specific_pre
 
     def _encode_with_mask(self, video, audio, flow, mask_tensor, use_recon_loss):

@@ -15,8 +15,7 @@ class LossFun(nn.Module):
 
     def forward(self, pred, label, feat, feat2, recon_loss, args):
         # feat (b, n, c), x (b, t, c)
-        use_diversity = getattr(args, "ablation_variant", "full") != "no_ldiv"
-        if feat is not None and use_diversity:
+        if feat is not None:
             device = feat.device
             b, n, c = feat.shape
             flat_feat = feat.reshape(-1, c)  # (bn, c)

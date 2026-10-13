@@ -36,7 +36,7 @@ import random
 from contextlib import contextmanager
 
 from .models import loss, model
-from .test import test_epoch
+from .test import test_epoch, evaluate_grouped_masks, load_availability_masks
 
 
 def setup_seed(seed):
@@ -132,25 +132,6 @@ def preserve_rng_and_model_mode(model):
             module.train(mode)
 
 
-def capture_rng_state():
-    state = {
-        "python": random.getstate(),
-        "numpy": np.random.get_state(),
-        "torch": torch.get_rng_state(),
-    }
-    if torch.cuda.is_available():
-        state["cuda"] = torch.cuda.get_rng_state_all()
-    return state
-
-
-def restore_rng_state(state):
-    random.setstate(state["python"])
-    np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
-    if torch.cuda.is_available() and "cuda" in state:
-        torch.cuda.set_rng_state_all(state["cuda"])
-
-
 def resolve_checkpoint_path(value):
     if os.path.isfile(value):
         return value
@@ -174,8 +155,6 @@ if __name__ == "__main__":
             raise ValueError("--selection-epoch must satisfy 0 <= selection_epoch < epoch")
     elif args.selection_epoch is not None:
         raise ValueError("--selection-epoch is only valid with fixed_epoch selection")
-    if args.resume_save_interval < 1:
-        raise ValueError("--resume-save-interval must be at least 1")
     setup_seed(args.seed)
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -240,8 +219,6 @@ if __name__ == "__main__":
     )
     train_fn = train.train_epoch
 
-    if args.ckpt is not None and args.resume is not None:
-        raise ValueError("--ckpt and --resume cannot be used together")
     if args.ckpt is not None:
         checkpoint_path = resolve_checkpoint_path(args.ckpt)
         checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -256,8 +233,6 @@ if __name__ == "__main__":
     if args.test:
         model.eval()
         if args.missing_ratio is not None:
-            from .evaluate import evaluate_grouped_masks, load_availability_masks
-
             sample_ids = [sample_id for sample_id, _ in test_data.labels]
             masks = load_availability_masks(
                 sample_ids, args.dataset, args.action_type, args.missing_ratio
@@ -315,11 +290,8 @@ if __name__ == "__main__":
     logger = SummaryWriter(os.path.join("./logs/", args.model_name))
 
     best_vaf_coef = -1.0
-    best_vaf_coef_mse = 100000.0
     best_vaf_mse = 100000.0
-    best_vaf_mse_coef = -1.0
     selected_epoch = -1
-    start_epoch = 0
 
     optim = get_optim(model, args)
     scheduler = get_scheduler(optim, args)
@@ -330,42 +302,9 @@ if __name__ == "__main__":
     else:
         warmup = None
 
-    if args.resume is not None:
-        resume_path = resolve_checkpoint_path(args.resume)
-        resume_state = torch.load(resume_path, map_location=device)
-        required = {"model_state", "optimizer_state", "epoch", "rng_state"}
-        missing = required.difference(resume_state)
-        if missing:
-            raise ValueError(f"resume checkpoint is missing keys: {sorted(missing)}")
-        saved_variant = resume_state.get("ablation_variant", args.ablation_variant)
-        saved_selection = resume_state.get("checkpoint_selection", args.checkpoint_selection)
-        if saved_variant != args.ablation_variant:
-            raise ValueError(
-                f"resume ablation mismatch: saved={saved_variant}, requested={args.ablation_variant}"
-            )
-        if saved_selection != args.checkpoint_selection:
-            raise ValueError(
-                f"resume selection mismatch: saved={saved_selection}, requested={args.checkpoint_selection}"
-            )
-        model.load_state_dict(resume_state["model_state"])
-        optim.load_state_dict(resume_state["optimizer_state"])
-        if scheduler is not None and resume_state.get("scheduler_state") is not None:
-            scheduler.load_state_dict(resume_state["scheduler_state"])
-        if warmup is not None and resume_state.get("warmup_state") is not None:
-            warmup.load_state_dict(resume_state["warmup_state"])
-        best_vaf_coef = float(resume_state.get("best_vaf_coef", best_vaf_coef))
-        best_vaf_coef_mse = float(resume_state.get("best_vaf_coef_mse", best_vaf_coef_mse))
-        best_vaf_mse = float(resume_state.get("best_vaf_mse", best_vaf_mse))
-        best_vaf_mse_coef = float(resume_state.get("best_vaf_mse_coef", best_vaf_mse_coef))
-        selected_epoch = int(resume_state.get("selected_epoch", selected_epoch))
-        start_epoch = int(resume_state["epoch"]) + 1
-        restore_rng_state(resume_state["rng_state"])
-        print(f"Resumed from {os.path.abspath(resume_path)} at epoch {start_epoch}")
-
-    last_state_path = os.path.join("./ckpt", args.model_name + "_last_state.pt")
     selected_path = os.path.join("./ckpt", args.model_name + "_selected.pkl")
 
-    for epc in range(start_epoch, args.epoch):
+    for epc in range(args.epoch):
         if args.warmup and epc < args.warmup:
             warmup.step()
 
@@ -383,12 +322,10 @@ if __name__ == "__main__":
         should_save = False
         if args.checkpoint_selection == "vaf_coef" and test_coef > best_vaf_coef:
             best_vaf_coef = float(test_coef)
-            best_vaf_coef_mse = float(test_loss)
             selected_epoch = epc
             should_save = True
         elif args.checkpoint_selection == "vaf_mse" and test_loss < best_vaf_mse:
             best_vaf_mse = float(test_loss)
-            best_vaf_mse_coef = float(test_coef)
             selected_epoch = epc
             should_save = True
         elif args.checkpoint_selection == "fixed_epoch" and epc == args.selection_epoch:
@@ -400,26 +337,6 @@ if __name__ == "__main__":
                 f"[Checkpoint] Updated selected weights: {selected_path} "
                 f"(rule={args.checkpoint_selection}, epoch={epc}, "
                 f"coef={test_coef:.6f}, mse={test_loss:.6f})"
-            )
-
-        if (epc + 1) % args.resume_save_interval == 0 or epc + 1 == args.epoch:
-            torch.save(
-                {
-                    "epoch": epc,
-                    "model_state": model.state_dict(),
-                    "optimizer_state": optim.state_dict(),
-                    "scheduler_state": None if scheduler is None else scheduler.state_dict(),
-                    "warmup_state": None if warmup is None else warmup.state_dict(),
-                    "best_vaf_coef": best_vaf_coef,
-                    "best_vaf_coef_mse": best_vaf_coef_mse,
-                    "best_vaf_mse": best_vaf_mse,
-                    "best_vaf_mse_coef": best_vaf_mse_coef,
-                    "selected_epoch": selected_epoch,
-                    "checkpoint_selection": args.checkpoint_selection,
-                    "ablation_variant": args.ablation_variant,
-                    "rng_state": capture_rng_state(),
-                },
-                last_state_path,
             )
 
         print(

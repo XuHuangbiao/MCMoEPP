@@ -26,7 +26,7 @@ def evaluate_epoch(epoch, model, data_loader, device, args):
         for batch_index, batch in enumerate(data_loader):
             text, visual, audio, label, utterance_mask = (item.to(device) for item in batch)
             generator = torch.Generator(device=device)
-            generator.manual_seed(args.seed + args.eval_seed_offset + epoch * 100_000 + batch_index)
+            generator.manual_seed(args.seed + 2_000_000 + epoch * 100_000 + batch_index)
             modality_mask = sample_utterance_mask(
                 text.size(0),
                 text.size(1),

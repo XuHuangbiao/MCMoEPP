@@ -53,10 +53,8 @@ def generate_modality_mask():
 
 
 class AGMG(nn.Module):
-    def __init__(self, hidden_dim, recon_layers=2):
+    def __init__(self, hidden_dim):
         super().__init__()
-        if recon_layers < 1:
-            raise ValueError("recon_layers must be positive")
         self.cross_attn = nn.ModuleList(
             [
                 nn.MultiheadAttention(
@@ -66,7 +64,7 @@ class AGMG(nn.Module):
                     kdim=hidden_dim,
                     vdim=hidden_dim,
                 )
-                for _ in range(recon_layers)
+                for _ in range(2)
             ]
         )
         self.gate = nn.Sequential(nn.Linear(2 * hidden_dim, hidden_dim), nn.Sigmoid())
@@ -80,28 +78,9 @@ class AGMG(nn.Module):
 
 
 class MoE_AQA(nn.Module):
-    ABLATION_VARIANTS = (
-        "full",
-        "baseline",
-        "stem",
-        "agmg",
-        "ma_moe",
-        "no_stem",
-        "no_agmg",
-        "no_ma_moe",
-        "no_ma_router",
-        "no_anchor_residual",
-        "no_shared_expert",
-        "no_coord",
-        "no_lrecon",
-        "no_lalign",
-        "no_ldiv",
-    )
-
     def __init__(self, in_dim, hidden_dim, n_head, n_encoder, n_decoder, n_query, dropout, config):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.set_ablation_variant(getattr(config, "ablation_variant", "full"))
         self.in_proj = nn.ModuleDict(
             {
                 "v": self._build_proj(in_dim, hidden_dim),
@@ -119,14 +98,12 @@ class MoE_AQA(nn.Module):
         )
         self.generators = nn.ModuleDict(
             {
-                "v": AGMG(hidden_dim, getattr(config, "recon_layers", 2)),
-                "a": AGMG(hidden_dim, getattr(config, "recon_layers", 2)),
-                "f": AGMG(hidden_dim, getattr(config, "recon_layers", 2)),
+                "v": AGMG(hidden_dim),
+                "a": AGMG(hidden_dim),
+                "f": AGMG(hidden_dim),
             }
         )
-        router_outputs = 3 if self.ablation_variant in {"no_anchor_residual", "no_ma_moe"} else 2
-        router_inputs = hidden_dim if self.ablation_variant == "no_ma_moe" else 3 * hidden_dim
-        self.router_mix = Mlp(router_inputs, hidden_dim // 2, router_outputs)
+        self.router_mix = Mlp(3 * hidden_dim, hidden_dim // 2, 2)
         self.stream_embed = nn.Embedding(3, hidden_dim)
         self.mask_embed = nn.Linear(3, hidden_dim)
         self.stream_reliability = Mlp(3 * hidden_dim, hidden_dim // 2, 1)
@@ -220,18 +197,7 @@ class MoE_AQA(nn.Module):
 
     def _conditioned_router(self, feat, mask_tensor, stream_idx):
         logits = self.router_mix(self._build_router_input(feat, mask_tensor, stream_idx))
-        if self.ablation_variant == "no_anchor_residual":
-            return torch.softmax(logits, dim=-1)
         return torch.sigmoid(logits)
-
-    def _feature_only_router(self, feat):
-        """Feature-only router for the trained no_ma_router ablation."""
-        zeros = torch.zeros_like(feat)
-        return torch.sigmoid(self.router_mix(torch.cat([feat, zeros, zeros], dim=-1)))
-
-    def _plain_three_expert_router(self, feat):
-        """Ordinary feature-only three-expert router used by w/o MA-MoE."""
-        return torch.softmax(self.router_mix(feat), dim=-1)
 
     def _complementary_specific_fusion(self, e0, e1, e2, router_weight, anchor_idx):
         if anchor_idx == 0:
@@ -254,17 +220,6 @@ class MoE_AQA(nn.Module):
             denom = 1.0 + w0 + w1
         fusion = anchor + residual / denom
         return fusion
-
-    def set_ablation_variant(self, variant):
-        if variant not in self.ABLATION_VARIANTS:
-            raise ValueError(
-                f"unknown ablation_variant={variant!r}; expected one of {self.ABLATION_VARIANTS}"
-            )
-        self.ablation_variant = variant
-
-    @staticmethod
-    def _softmax_specific_fusion(e0, e1, e2, weights):
-        return weights[..., 0:1] * e0 + weights[..., 1:2] * e1 + weights[..., 2:3] * e2
 
     def _build_shared_feat(self, v_mask, a_mask, f_mask):
         shared_base = (v_mask + a_mask + f_mask) / 3.0
@@ -311,15 +266,13 @@ class MoE_AQA(nn.Module):
             return self.forward_test(video, audio, flow, mask)
 
     def forward_train(self, video, audio, flow, mask):
-        variant = self.ablation_variant
-        b, t, c = video.shape
+        b = video.shape[0]
         v = self.in_proj["v"](video.transpose(1, 2)).transpose(1, 2)
         a = self.in_proj["a"](audio.transpose(1, 2)).transpose(1, 2)
         f = self.in_proj["f"](flow.transpose(1, 2)).transpose(1, 2)
-        use_stem = variant not in {"baseline", "no_stem"}
-        proj_v = self.transformer.encoder(v) if use_stem else v
-        proj_a = self.transformer.encoder(a) if use_stem else a
-        proj_f = self.transformer.encoder(f) if use_stem else f
+        proj_v = self.transformer.encoder(v)
+        proj_a = self.transformer.encoder(a)
+        proj_f = self.transformer.encoder(f)
         train_mask = generate_modality_mask()
         mask_tensor = torch.tensor(train_mask, device=video.device).float().view(1, 3)
         v_m, a_m, f_m = train_mask
@@ -328,121 +281,35 @@ class MoE_AQA(nn.Module):
         f_mask = proj_f if f_m == 1 else torch.zeros_like(proj_f)
         missing = [key for key, visible in zip(("v", "a", "f"), (v_m, a_m, f_m)) if visible == 0]
         recon_loss = video.new_zeros(())
-        if variant not in {"baseline", "stem", "no_agmg"}:
-            for m in missing:
-                exist_feats = []
-                if "v" not in missing:
-                    exist_feats.append(v_mask)
-                if "a" not in missing:
-                    exist_feats.append(a_mask)
-                if "f" not in missing:
-                    exist_feats.append(f_mask)
-                if m == "v":
-                    v_mask = self.generators["v"](exist_feats, torch.zeros_like(v_mask))
-                    if variant != "no_lrecon":
-                        recon_loss = recon_loss + F.mse_loss(v_mask, proj_v)
-                elif m == "a":
-                    a_mask = self.generators["a"](exist_feats, torch.zeros_like(a_mask))
-                    if variant != "no_lrecon":
-                        recon_loss = recon_loss + F.mse_loss(a_mask, proj_a)
-                else:
-                    f_mask = self.generators["f"](exist_feats, torch.zeros_like(f_mask))
-                    if variant != "no_lrecon":
-                        recon_loss = recon_loss + F.mse_loss(f_mask, proj_f)
-
-        if variant in {"baseline", "stem", "agmg"}:
-            specific_v, specific_a, specific_f = v_mask, a_mask, f_mask
-            specific_cat = torch.cat([specific_v, specific_a, specific_f], -1)
-            specific_global = self.fusion(specific_cat.transpose(1, 2)).transpose(1, 2)
-            fusion = specific_global
-        else:
-            expert_vv = self.experts["v"](v_mask.transpose(1, 2)).transpose(1, 2)
-            expert_va = self.experts["a"](v_mask.transpose(1, 2)).transpose(1, 2)
-            expert_vf = self.experts["f"](v_mask.transpose(1, 2)).transpose(1, 2)
-            expert_av = self.experts["v"](a_mask.transpose(1, 2)).transpose(1, 2)
-            expert_aa = self.experts["a"](a_mask.transpose(1, 2)).transpose(1, 2)
-            expert_af = self.experts["f"](a_mask.transpose(1, 2)).transpose(1, 2)
-            expert_fv = self.experts["v"](f_mask.transpose(1, 2)).transpose(1, 2)
-            expert_fa = self.experts["a"](f_mask.transpose(1, 2)).transpose(1, 2)
-            expert_ff = self.experts["f"](f_mask.transpose(1, 2)).transpose(1, 2)
-            if variant == "no_ma_moe":
-                router_weight_v = self._plain_three_expert_router(v_mask)
-                router_weight_a = self._plain_three_expert_router(a_mask)
-                router_weight_f = self._plain_three_expert_router(f_mask)
-            elif variant == "no_ma_router":
-                router_weight_v = self._feature_only_router(v_mask)
-                router_weight_a = self._feature_only_router(a_mask)
-                router_weight_f = self._feature_only_router(f_mask)
+        for m in missing:
+            exist_feats = [feat for key, feat in (("v", v_mask), ("a", a_mask), ("f", f_mask)) if key not in missing]
+            if m == "v":
+                v_mask = self.generators["v"](exist_feats, torch.zeros_like(v_mask))
+                recon_loss = recon_loss + F.mse_loss(v_mask, proj_v)
+            elif m == "a":
+                a_mask = self.generators["a"](exist_feats, torch.zeros_like(a_mask))
+                recon_loss = recon_loss + F.mse_loss(a_mask, proj_a)
             else:
-                router_weight_v = self._conditioned_router(v_mask, mask_tensor, stream_idx=0)
-                router_weight_a = self._conditioned_router(a_mask, mask_tensor, stream_idx=1)
-                router_weight_f = self._conditioned_router(f_mask, mask_tensor, stream_idx=2)
+                f_mask = self.generators["f"](exist_feats, torch.zeros_like(f_mask))
+                recon_loss = recon_loss + F.mse_loss(f_mask, proj_f)
 
-            if variant in {"no_anchor_residual", "no_ma_moe"}:
-                specific_v = self._softmax_specific_fusion(
-                    expert_vv, expert_va, expert_vf, router_weight_v
-                )
-                specific_a = self._softmax_specific_fusion(
-                    expert_av, expert_aa, expert_af, router_weight_a
-                )
-                specific_f = self._softmax_specific_fusion(
-                    expert_fv, expert_fa, expert_ff, router_weight_f
-                )
-            else:
-                specific_v = self._complementary_specific_fusion(
-                    expert_vv, expert_va, expert_vf, router_weight_v, anchor_idx=0
-                )
-                specific_a = self._complementary_specific_fusion(
-                    expert_av, expert_aa, expert_af, router_weight_a, anchor_idx=1
-                )
-                specific_f = self._complementary_specific_fusion(
-                    expert_fv, expert_fa, expert_ff, router_weight_f, anchor_idx=2
-                )
+        streams = (v_mask, a_mask, f_mask)
+        specific_pre = []
+        for idx, stream in enumerate(streams):
+            experts = [self.experts[key](stream.transpose(1, 2)).transpose(1, 2) for key in ("v", "a", "f")]
+            weights = self._conditioned_router(stream, mask_tensor, stream_idx=idx)
+            specific_pre.append(self._complementary_specific_fusion(*experts, weights, anchor_idx=idx))
+        specific = [self._stream_reliability_gate(feat, mask_tensor, stream_idx=idx) * feat
+                    for idx, feat in enumerate(specific_pre)]
+        specific_global = self.fusion(torch.cat(specific, -1).transpose(1, 2)).transpose(1, 2)
+        shared_feat = self._build_shared_feat(*streams)
+        fusion, _ = self._global_shared_specific_fusion(specific_global, shared_feat, mask_tensor)
 
-            specific_v_pre, specific_a_pre, specific_f_pre = specific_v, specific_a, specific_f
-            if variant in {"ma_moe", "no_coord"}:
-                rel_v = torch.ones_like(specific_v[..., :1])
-                rel_a = torch.ones_like(specific_a[..., :1])
-                rel_f = torch.ones_like(specific_f[..., :1])
-            else:
-                rel_v = self._stream_reliability_gate(specific_v, mask_tensor, stream_idx=0)
-                rel_a = self._stream_reliability_gate(specific_a, mask_tensor, stream_idx=1)
-                rel_f = self._stream_reliability_gate(specific_f, mask_tensor, stream_idx=2)
-            specific_v = rel_v * specific_v
-            specific_a = rel_a * specific_a
-            specific_f = rel_f * specific_f
-            specific_cat = torch.cat([specific_v, specific_a, specific_f], -1)
-            specific_global = self.fusion(specific_cat.transpose(1, 2)).transpose(1, 2)
-
-            if variant == "ma_moe":
-                fusion = specific_global
-            elif variant == "no_shared_expert":
-                shared_feat = (v_mask + a_mask + f_mask) / 3.0
-            else:
-                shared_feat = self._build_shared_feat(v_mask, a_mask, f_mask)
-            if variant != "ma_moe":
-                if variant == "no_coord":
-                    shared_ratio = torch.full_like(specific_global[..., :1], 0.5)
-                    fusion = specific_global + shared_ratio * (shared_feat - specific_global)
-                else:
-                    fusion, shared_ratio = self._global_shared_specific_fusion(
-                        specific_global, shared_feat, mask_tensor
-                    )
-
-            if variant != "no_lalign":
-                expert_v = self.experts["v"](proj_v.transpose(1, 2)).transpose(1, 2)
-                expert_a = self.experts["a"](proj_a.transpose(1, 2)).transpose(1, 2)
-                expert_f = self.experts["f"](proj_f.transpose(1, 2)).transpose(1, 2)
-                align_v, align_a, align_f = specific_v_pre, specific_a_pre, specific_f_pre
-                recon_loss = recon_loss + F.kl_div(
-                    torch.log_softmax(align_v, -1), torch.softmax(expert_v, -1), reduction="mean"
-                )
-                recon_loss = recon_loss + F.kl_div(
-                    torch.log_softmax(align_a, -1), torch.softmax(expert_a, -1), reduction="mean"
-                )
-                recon_loss = recon_loss + F.kl_div(
-                    torch.log_softmax(align_f, -1), torch.softmax(expert_f, -1), reduction="mean"
-                )
+        for key, proj, aligned in zip(("v", "a", "f"), (proj_v, proj_a, proj_f), specific_pre):
+            expert = self.experts[key](proj.transpose(1, 2)).transpose(1, 2)
+            recon_loss = recon_loss + F.kl_div(
+                torch.log_softmax(aligned, -1), torch.softmax(expert, -1), reduction="mean"
+            )
 
         prototype = self.prototype.weight.unsqueeze(0).repeat(b, 1, 1)
         prototype = self.pos_encoder(prototype)
@@ -452,146 +319,39 @@ class MoE_AQA(nn.Module):
         norm_s = torch.sigmoid(s)
         norm_s = norm_s / torch.sum(norm_s, dim=1, keepdim=True)
         out = torch.sum(self.weight.unsqueeze(0).repeat(b, 1) * norm_s, dim=1)
-        return {
-            "output": out,
-            "embed": fea,
-            "embed2": None,
-            "recon_loss": recon_loss,
-        }
+        return {"output": out, "embed": fea, "embed2": None, "recon_loss": recon_loss}
 
     def forward_test(self, video, audio, flow, mask):
-        variant = self.ablation_variant
-        b, t, c = video.shape
+        b, t, _ = video.shape
         mask_tensor = torch.tensor(mask, device=video.device).float().view(1, 3)
         v_visible, a_visible, f_visible = mask
-        use_stem = variant not in {"baseline", "no_stem"}
-        if v_visible == 1:
-            v = self.in_proj["v"](video.transpose(1, 2)).transpose(1, 2)
-            v_mask = self.transformer.encoder(v) if use_stem else v
-        else:
-            v_mask = torch.zeros(b, t, self.hidden_dim).to(video.device)
-        if a_visible == 1:
-            a = self.in_proj["a"](audio.transpose(1, 2)).transpose(1, 2)
-            a_mask = self.transformer.encoder(a) if use_stem else a
-        else:
-            a_mask = torch.zeros(b, t, self.hidden_dim).to(audio.device)
-        if f_visible == 1:
-            f = self.in_proj["f"](flow.transpose(1, 2)).transpose(1, 2)
-            f_mask = self.transformer.encoder(f) if use_stem else f
-        else:
-            f_mask = torch.zeros(b, t, self.hidden_dim).to(flow.device)
-
-        missing = [
-            key
-            for key, visible in zip(("v", "a", "f"), (v_visible, a_visible, f_visible))
-            if visible == 0
-        ]
-        if variant not in {"baseline", "stem", "no_agmg"}:
-            for m in missing:
-                exist_feats = []
-                if "v" not in missing:
-                    exist_feats.append(v_mask)
-                if "a" not in missing:
-                    exist_feats.append(a_mask)
-                if "f" not in missing:
-                    exist_feats.append(f_mask)
-                if m == "v":
-                    v_mask = self.generators["v"](exist_feats, torch.zeros_like(v_mask))
-                elif m == "a":
-                    a_mask = self.generators["a"](exist_feats, torch.zeros_like(a_mask))
-                else:
-                    f_mask = self.generators["f"](exist_feats, torch.zeros_like(f_mask))
-
-        if variant in {"baseline", "stem", "agmg"}:
-            # Progressive mechanism-only rows before MA-MoE: the three current
-            # streams enter the original CFM directly. No expert/router/MASEC
-            # parameter is called.
-            specific_v, specific_a, specific_f = v_mask, a_mask, f_mask
-            specific_cat = torch.cat([specific_v, specific_a, specific_f], -1)
-            specific_global = self.fusion(specific_cat.transpose(1, 2)).transpose(1, 2)
-            fusion = specific_global
-        else:
-            expert_vv = self.experts["v"](v_mask.transpose(1, 2)).transpose(1, 2)
-            expert_va = self.experts["a"](v_mask.transpose(1, 2)).transpose(1, 2)
-            expert_vf = self.experts["f"](v_mask.transpose(1, 2)).transpose(1, 2)
-            expert_av = self.experts["v"](a_mask.transpose(1, 2)).transpose(1, 2)
-            expert_aa = self.experts["a"](a_mask.transpose(1, 2)).transpose(1, 2)
-            expert_af = self.experts["f"](a_mask.transpose(1, 2)).transpose(1, 2)
-            expert_fv = self.experts["v"](f_mask.transpose(1, 2)).transpose(1, 2)
-            expert_fa = self.experts["a"](f_mask.transpose(1, 2)).transpose(1, 2)
-            expert_ff = self.experts["f"](f_mask.transpose(1, 2)).transpose(1, 2)
-            if variant == "no_ma_moe":
-                router_weight_v = self._plain_three_expert_router(v_mask)
-                router_weight_a = self._plain_three_expert_router(a_mask)
-                router_weight_f = self._plain_three_expert_router(f_mask)
-            elif variant == "no_ma_router":
-                router_weight_v = self._feature_only_router(v_mask)
-                router_weight_a = self._feature_only_router(a_mask)
-                router_weight_f = self._feature_only_router(f_mask)
+        streams = []
+        for key, feat, visible in zip(("v", "a", "f"), (video, audio, flow), mask):
+            if visible:
+                projected = self.in_proj[key](feat.transpose(1, 2)).transpose(1, 2)
+                streams.append(self.transformer.encoder(projected))
             else:
-                router_weight_v = self._conditioned_router(v_mask, mask_tensor, stream_idx=0)
-                router_weight_a = self._conditioned_router(a_mask, mask_tensor, stream_idx=1)
-                router_weight_f = self._conditioned_router(f_mask, mask_tensor, stream_idx=2)
-
-            if variant == "no_ma_moe":
-                specific_v = self._softmax_specific_fusion(
-                    expert_vv, expert_va, expert_vf, router_weight_v
-                )
-                specific_a = self._softmax_specific_fusion(
-                    expert_av, expert_aa, expert_af, router_weight_a
-                )
-                specific_f = self._softmax_specific_fusion(
-                    expert_fv, expert_fa, expert_ff, router_weight_f
-                )
-            elif variant == "no_anchor_residual":
-                specific_v = self._softmax_specific_fusion(
-                    expert_vv, expert_va, expert_vf, router_weight_v
-                )
-                specific_a = self._softmax_specific_fusion(
-                    expert_av, expert_aa, expert_af, router_weight_a
-                )
-                specific_f = self._softmax_specific_fusion(
-                    expert_fv, expert_fa, expert_ff, router_weight_f
-                )
+                streams.append(torch.zeros(b, t, self.hidden_dim, device=video.device))
+        v_mask, a_mask, f_mask = streams
+        missing = [key for key, visible in zip(("v", "a", "f"), mask) if not visible]
+        for m in missing:
+            exist_feats = [feat for key, feat in zip(("v", "a", "f"), (v_mask, a_mask, f_mask)) if key not in missing]
+            if m == "v":
+                v_mask = self.generators["v"](exist_feats, torch.zeros_like(v_mask))
+            elif m == "a":
+                a_mask = self.generators["a"](exist_feats, torch.zeros_like(a_mask))
             else:
-                specific_v = self._complementary_specific_fusion(
-                    expert_vv, expert_va, expert_vf, router_weight_v, anchor_idx=0
-                )
-                specific_a = self._complementary_specific_fusion(
-                    expert_av, expert_aa, expert_af, router_weight_a, anchor_idx=1
-                )
-                specific_f = self._complementary_specific_fusion(
-                    expert_fv, expert_fa, expert_ff, router_weight_f, anchor_idx=2
-                )
-
-            if variant in {"ma_moe", "no_coord"}:
-                rel_v = torch.ones_like(specific_v[..., :1])
-                rel_a = torch.ones_like(specific_a[..., :1])
-                rel_f = torch.ones_like(specific_f[..., :1])
-            else:
-                rel_v = self._stream_reliability_gate(specific_v, mask_tensor, stream_idx=0)
-                rel_a = self._stream_reliability_gate(specific_a, mask_tensor, stream_idx=1)
-                rel_f = self._stream_reliability_gate(specific_f, mask_tensor, stream_idx=2)
-            specific_v = rel_v * specific_v
-            specific_a = rel_a * specific_a
-            specific_f = rel_f * specific_f
-            specific_cat = torch.cat([specific_v, specific_a, specific_f], -1)
-            specific_global = self.fusion(specific_cat.transpose(1, 2)).transpose(1, 2)
-
-            if variant == "ma_moe":
-                fusion = specific_global
-            else:
-                if variant == "no_shared_expert":
-                    shared_feat = (v_mask + a_mask + f_mask) / 3.0
-                else:
-                    shared_feat = self._build_shared_feat(v_mask, a_mask, f_mask)
-                if variant == "no_coord":
-                    shared_ratio = torch.full_like(specific_global[..., :1], 0.5)
-                    fusion = specific_global + shared_ratio * (shared_feat - specific_global)
-                else:
-                    fusion, shared_ratio = self._global_shared_specific_fusion(
-                        specific_global, shared_feat, mask_tensor
-                    )
+                f_mask = self.generators["f"](exist_feats, torch.zeros_like(f_mask))
+        streams = (v_mask, a_mask, f_mask)
+        specific = []
+        for idx, stream in enumerate(streams):
+            experts = [self.experts[key](stream.transpose(1, 2)).transpose(1, 2) for key in ("v", "a", "f")]
+            weights = self._conditioned_router(stream, mask_tensor, stream_idx=idx)
+            mixed = self._complementary_specific_fusion(*experts, weights, anchor_idx=idx)
+            specific.append(self._stream_reliability_gate(mixed, mask_tensor, stream_idx=idx) * mixed)
+        specific_global = self.fusion(torch.cat(specific, -1).transpose(1, 2)).transpose(1, 2)
+        shared_feat = self._build_shared_feat(*streams)
+        fusion, _ = self._global_shared_specific_fusion(specific_global, shared_feat, mask_tensor)
         prototype = self.prototype.weight.unsqueeze(0).repeat(b, 1, 1)
         prototype = self.pos_encoder(prototype)
         fea, _ = self.transformer.decoder(prototype, fusion)

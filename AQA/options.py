@@ -31,11 +31,6 @@ parser.add_argument(
     "--model-name", type=str, default="action_net", help="name used to save model and logs"
 )
 parser.add_argument("--ckpt", default=None, help="ckpt for pretrained model")
-parser.add_argument(
-    "--resume",
-    default=None,
-    help="training-state checkpoint to resume (restores model, optimizer, schedulers, RNG, and epoch)",
-)
 parser.add_argument("--test", action="store_true", help="only evaluate, don't train")
 parser.add_argument(
     "--missing-ratio",
@@ -44,29 +39,6 @@ parser.add_argument(
     default=None,
     help="evaluate one proportional missing rate using the released masks/*.json",
 )
-parser.add_argument(
-    "--ablation_variant",
-    choices=(
-        "full",
-        "baseline",
-        "stem",
-        "agmg",
-        "ma_moe",
-        "no_stem",
-        "no_agmg",
-        "no_ma_moe",
-        "no_ma_router",
-        "no_anchor_residual",
-        "no_shared_expert",
-        "no_coord",
-        "no_lrecon",
-        "no_lalign",
-        "no_ldiv",
-    ),
-    default="full",
-    help="retrained ablation architecture; valid for both training and testing",
-)
-
 parser.add_argument("--epoch", type=int, default=400)
 parser.add_argument("--batch", type=int, default=32)
 parser.add_argument("--lr", type=float, default=0.001)
@@ -86,7 +58,6 @@ parser.add_argument("--n_head", type=int, default=2)
 parser.add_argument("--n_encoder", type=int, default=3)
 parser.add_argument("--n_decoder", type=int, default=3)
 parser.add_argument("--n_query", type=int, default=4)
-parser.add_argument("--recon-layers", type=int, default=2, help="number of independent completion cross-attention layers")
 parser.add_argument("--use_pe", type=parse_bool, default=False)
 
 parser.add_argument("--alpha", type=float, default=1.0)
@@ -107,10 +78,4 @@ parser.add_argument(
     type=int,
     default=None,
     help="zero-based epoch saved when --checkpoint-selection=fixed_epoch",
-)
-parser.add_argument(
-    "--resume-save-interval",
-    type=int,
-    default=1,
-    help="save resumable training state every N epochs (model selection is unaffected)",
 )

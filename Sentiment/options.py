@@ -43,29 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     protocol.add_argument("--metric-main", choices=("waf1", "acc"), default="waf1")
-    protocol.add_argument(
-        "--eval-seed-offset",
-        type=int,
-        default=2_000_000,
-        help="Deterministic epoch-dependent validation/test mask offset.",
-    )
-
     model = parser.add_argument_group("model")
-    model.add_argument(
-        "--model-variant",
-        choices=(
-            "mcmoe_pp",
-            "ma_moe",
-            "wo_ma_router",
-            "wo_anchor_residual",
-            "wo_shared_expert",
-            "wo_coord",
-            "wo_gamma_stream",
-            "wo_beta_global",
-        ),
-        default="mcmoe_pp",
-        help="Architecture flag stored with the checkpoint; non-full variants require retraining.",
-    )
     model.add_argument("--in_dim", type=int, default=768)
     model.add_argument("--hidden_dim", type=int, default=256)
     model.add_argument("--n_head", type=int, default=2)
@@ -95,7 +73,6 @@ def build_parser() -> argparse.ArgumentParser:
     output = parser.add_argument_group("output")
     output.add_argument("--model-name", required=True)
     output.add_argument("--output-dir", default="outputs")
-    output.add_argument("--summary-path", default=None)
     output.add_argument("--ckpt", default=None)
     output.add_argument(
         "--test-eval-epoch", type=int, default=None,
