@@ -57,7 +57,6 @@ CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-pa
 
 ```
 
-Sentiment testing retains the online utterance-level missingness protocol. Bare state-dict checkpoints require their validation-selected epoch to reproduce the corresponding test mask.
 
 ## Acknowledgements
 
