@@ -59,6 +59,7 @@ parser.add_argument("--n_encoder", type=int, default=3)
 parser.add_argument("--n_decoder", type=int, default=3)
 parser.add_argument("--n_query", type=int, default=4)
 parser.add_argument("--use_pe", type=parse_bool, default=False)
+parser.add_argument("--agmg_query_pe", type=parse_bool, default=False)
 
 parser.add_argument("--alpha", type=float, default=1.0)
 parser.add_argument("--margin", type=float, default=1.0)

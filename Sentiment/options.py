@@ -52,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     model.add_argument("--n_query", type=int, default=4)
     model.add_argument("--dropout", type=float, default=0.0)
     model.add_argument("--use_pe", type=parse_bool, default=False)
+    model.add_argument("--agmg_query_pe", type=parse_bool, default=False)
 
     training = parser.add_argument_group("optimization")
     training.add_argument("--epoch", type=int, default=400)

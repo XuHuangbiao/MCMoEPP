@@ -53,8 +53,9 @@ def generate_modality_mask():
 
 
 class AGMG(nn.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, hidden_dim, query_pe=False):
         super().__init__()
+        self.query_pe = query_pe
         self.cross_attn = nn.ModuleList(
             [
                 nn.MultiheadAttention(
@@ -71,6 +72,12 @@ class AGMG(nn.Module):
 
     def forward(self, exist_feats, mask_feat):
         context = torch.cat(exist_feats, dim=1)
+        if self.query_pe:
+            t, d = mask_feat.shape[1:]
+            pos = torch.arange(t, device=mask_feat.device).float().unsqueeze(1)
+            div = torch.exp(torch.arange(0, d, 2, device=mask_feat.device).float() * (-math.log(10000.0) / d))
+            pe = torch.stack([torch.sin(pos * div), torch.cos(pos * div)], -1).flatten(1)
+            mask_feat = mask_feat + pe
         for attn in self.cross_attn:
             mask_feat, _ = attn(mask_feat, context, context)
         gate = self.gate(torch.cat([mask_feat.mean(1), context.mean(1)], -1))
@@ -98,9 +105,9 @@ class MoE_AQA(nn.Module):
         )
         self.generators = nn.ModuleDict(
             {
-                "v": AGMG(hidden_dim),
-                "a": AGMG(hidden_dim),
-                "f": AGMG(hidden_dim),
+                "v": AGMG(hidden_dim, getattr(config, "agmg_query_pe", False)),
+                "a": AGMG(hidden_dim, getattr(config, "agmg_query_pe", False)),
+                "f": AGMG(hidden_dim, getattr(config, "agmg_query_pe", False)),
             }
         )
         self.router_mix = Mlp(3 * hidden_dim, hidden_dim // 2, 2)

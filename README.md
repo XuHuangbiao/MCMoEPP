@@ -31,13 +31,13 @@ On the **FS1000 / Fis-V / RG** datasets, run the following commands from `AQA/`.
 
 - Training
 ```typescript
-CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {action type} --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed} --checkpoint-selection {task rule} [--selection-epoch {zero-based epoch}]
+CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --model-name {the name used to save model and log} --action-type {action type} --clip-num {clip number} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --alpha {alpha} --margin {margin} --lr-decay {lr decay scheduler} --decay-rate {decay rate} --dropout {dropout} --seed {seed} --checkpoint-selection {task rule} [--selection-epoch {zero-based epoch}]
 
 ```
 
 - Testing
 ```typescript
-CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {action type} --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} [--missing-ratio {0.0-0.7}] --test --ckpt {the name of the used checkpoint}
+CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {FS1000/FisV/RG} --video-path {path of video features} --audio-path {path of audio features} --flow-path {path of flow features} --train-label-path {path of label file of training set} --test-label-path {path of label file of test set} --action-type {action type} --clip-num {clip number} --in_dim {input dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} [--missing-ratio {0.0-0.7}] --test --ckpt {the name of the used checkpoint}
 
 ```
 
@@ -47,13 +47,13 @@ On the **CMU-MOSI / CMU-MOSEI** datasets, run the following commands from `Senti
 
 - Training
 ```typescript
-CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --alpha {alpha} --margin {margin} --dropout {dropout} --seed {seed}
+CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --alpha {alpha} --margin {margin} --dropout {dropout} --seed {seed}
 
 ```
 
 - Testing
 ```typescript
-CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --seed {seed} --test --ckpt {the name of the used checkpoint} [--test-eval-epoch {validation-selected epoch for bare state-dict checkpoints}]
+CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --seed {seed} --test --ckpt {the name of the used checkpoint} [--test-eval-epoch {validation-selected epoch for bare state-dict checkpoints}]
 
 ```
 
