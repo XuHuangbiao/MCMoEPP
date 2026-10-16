@@ -47,13 +47,13 @@ On the **CMU-MOSI / CMU-MOSEI** datasets, run the following commands from `Senti
 
 - Training
 ```typescript
-CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --alpha {alpha} --margin {margin} --dropout {dropout} --seed {seed}
+CUBLAS_WORKSPACE_CONFIG=:4096:8 CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --lr {learning rate} --epoch {epoch} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --alpha {alpha} --margin {margin} --dropout {dropout} --seed {seed}
 
 ```
 
 - Testing
 ```typescript
-CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --seed {seed} --test --ckpt {the name of the used checkpoint} [--test-eval-epoch {validation-selected epoch for bare state-dict checkpoints}]
+CUBLAS_WORKSPACE_CONFIG=:4096:8 CUDA_VISIBLE_DEVICES={device ID} python main.py --dataset {MOSI/MOSEI} --text-path {path of deberta-large-4-UTT features} --video-path {path of manet_UTT features} --audio-path {path of wav2vec-large-c-UTT features} --label-path {path of MOSI/MOSEI label file} --missing-rate {0.0-0.7} --model-name {the name used to save model and log} --in_dim {input dimension} --hidden_dim {hidden dimension} --n_head {number of heads} --n_encoder {number of encoder layers} --n_decoder {number of decoder layers} --n_query {number of queries} --use_pe {use positional encoding} --agmg_query_pe {True/False} --seed {seed} --test --ckpt {the name of the used checkpoint} [--test-eval-epoch {validation-selected epoch for bare state-dict checkpoints}]
 
 ```
 
